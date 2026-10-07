@@ -28,9 +28,10 @@ from matplotlib.colors import LogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from bcdikit.utils.general import apply_roi, slice_middle_array_along_axis, create_diffracted_amplitude
+from bcdikit.utils.object import get_module_phase
 
 
-DEFAULT_DETECTOR_CMAP = 'gray'
+DEFAULT_DETECTOR_CMAP = 'turbo'
 
 
 ### -----------------------------------------------------------------------
@@ -118,25 +119,25 @@ def check_roi(img, roi, norm=None):
     return
 
 
-def cnorm(data, normtype, dmin=None, dmax=None):
-    """Build a matplotlib Normalize/LogNorm for `data`, choosing a sensible
-    default dmin (smallest positive value) for log scales."""
-    if dmax is None:
-        dmax = np.nanmax(data)
-    if dmin is None:
-        ipos = data > 0
-        if ipos.any():
-            dmin = np.nanmin(data[ipos])
-        else:
-            dmin = np.nanmin(data)
+# def cnorm(data, normtype, dmin=None, dmax=None):
+#     """Build a matplotlib Normalize/LogNorm for `data`, choosing a sensible
+#     default dmin (smallest positive value) for log scales."""
+#     if dmax is None:
+#         dmax = np.nanmax(data)
+#     if dmin is None:
+#         ipos = data > 0
+#         if ipos.any():
+#             dmin = np.nanmin(data[ipos])
+#         else:
+#             dmin = np.nanmin(data)
 
-    if normtype == "log":
-        return colors.LogNorm(dmin, dmax)
-    elif normtype == 'linear' or normtype is None or normtype == '':
-        return colors.Normalize(dmin, dmax)
-    else:
-        print('unknown norm, using a linear one')
-        return colors.Normalize(dmin, dmax)
+#     if normtype == "log":
+#         return colors.LogNorm(dmin, dmax)
+#     elif normtype == 'linear' or normtype is None or normtype == '':
+#         return colors.Normalize(dmin, dmax)
+#     else:
+#         print('unknown norm, using a linear one')
+#         return colors.Normalize(dmin, dmax)
 
 
 # def plot_gradient_color(x_list, y_list,
@@ -223,71 +224,32 @@ def plot_detector_sum_with_roi(data, roi, fw=5, **kwargs):
     return
 
 
-# def MIR_Colormap():
-#     """A custom diverging colormap (white -> blue -> green -> yellow -> red
-#     -> black), kept around in case old notebooks still reference it."""
-#     cdict = {
-#         'red':   ((0.0, 1.0, 1.0), (0.11, 0.0, 0.0), (0.36, 0.0, 0.0),
-#                   (0.62, 1.0, 1.0), (0.87, 1.0, 1.0), (1.0, 0.0, 0.0)),
-#         'green': ((0.0, 1.0, 1.0), (0.11, 0.0, 0.0), (0.36, 1.0, 1.0),
-#                   (0.62, 1.0, 1.0), (0.87, 0.0, 0.0), (1.0, 0.0, 0.0)),
-#         'blue':  ((0.0, 1.0, 1.0), (0.11, 1.0, 1.0), (0.36, 1.0, 1.0),
-#                   (0.62, 0.0, 0.0), (0.87, 0.0, 0.0), (1.0, 0.0, 0.0)),
-#     }
-#     return mpl.colors.LinearSegmentedColormap('MIR_colormap', cdict, 256)
+def MIR_Colormap():
+    """A custom diverging colormap (white -> blue -> green -> yellow -> red
+    -> black), kept around in case old notebooks still reference it."""
+    cdict = {
+        'red':   ((0.0, 1.0, 1.0), (0.11, 0.0, 0.0), (0.36, 0.0, 0.0),
+                  (0.62, 1.0, 1.0), (0.87, 1.0, 1.0), (1.0, 0.0, 0.0)),
+        'green': ((0.0, 1.0, 1.0), (0.11, 0.0, 0.0), (0.36, 1.0, 1.0),
+                  (0.62, 1.0, 1.0), (0.87, 0.0, 0.0), (1.0, 0.0, 0.0)),
+        'blue':  ((0.0, 1.0, 1.0), (0.11, 1.0, 1.0), (0.36, 1.0, 1.0),
+                  (0.62, 0.0, 0.0), (0.87, 0.0, 0.0), (1.0, 0.0, 0.0)),
+    }
+    return mpl.colors.LinearSegmentedColormap('MIR_colormap', cdict, 256)
 
 
 ### -----------------------------------------------------------------------
 ### Module/phase extraction from a complex object
 ### -----------------------------------------------------------------------
+### (the actual implementation lives in bcdikit.utils.object_utils -
+### get_module_phase - this is just a small dispatch wrapper for
+### plot_projections' `component` option)
 
-def _module_phase(obj, threshold_module=None, support=None, unwrap=True, apply_fftshift=False):
-    """Split a complex array `obj` into module and phase.
-
-    FLAG: this is a deliberately minimal stand-in for the old
-    `get_cropped_module_phase` (from `Object_utilities.py`, not yet ported
-    to bcdikit). It does module/phase/masking/unwrapping, but it does NOT
-    do the automatic cropping-to-the-object-support that the original did
-    (there's no `crop` option here). Once Object_utilities is ported this
-    should be revisited.
-
-    threshold_module / support: if given, the phase outside the support
-    (module > threshold_module * module.max(), or the explicit boolean
-    `support` array) is set to nan, and only the support region is passed
-    to the phase-unwrapping step.
-    """
-    if apply_fftshift:
-        obj = np.fft.fftshift(obj)
-
-    module = np.abs(obj)
-    phase = np.angle(obj)
-
-    if support is None and threshold_module is not None:
-        support = module > threshold_module * np.nanmax(module)
-
-    if unwrap:
-        try:
-            from skimage.restoration import unwrap_phase
-        except ImportError:
-            warnings.warn("scikit-image is required to unwrap the phase "
-                           "(pip install scikit-image) - returning the wrapped phase instead.")
-        else:
-            if support is not None:
-                phase = np.ma.filled(unwrap_phase(np.ma.masked_array(phase, mask=~support)), np.nan)
-            else:
-                phase = unwrap_phase(phase)
-
-    if support is not None:
-        phase = np.where(support, phase, np.nan)
-
-    return module, phase
-
-
-def _component_3d(array, component, threshold_module=None, support=None,
-                   unwrap=True, apply_fftshift=False):
+def _component(array, component, threshold_module=None, support=None,
+                unwrap=True, apply_fftshift=False):
     if component == 'phase':
-        _, phase = _module_phase(array, threshold_module=threshold_module, support=support,
-                                  unwrap=unwrap, apply_fftshift=apply_fftshift)
+        _, phase = get_module_phase(array, threshold_module=threshold_module, support=support,
+                                     unwrap=unwrap, apply_fftshift=apply_fftshift)
         return phase
     module = np.abs(np.fft.fftshift(array)) if apply_fftshift else np.abs(array)
     if component == 'intensity':
@@ -431,7 +393,7 @@ def plot_slices(array,
       - 3D complex array -> module + phase, 3 orthogonal slices each (2x3)
 
     `threshold_module`, `support`, `unwrap`, `apply_fftshift` only affect
-    the phase of a complex array (see `_module_phase`). `voxel_sizes` is in
+    the phase of a complex array (see `bcdikit.utils.object_utils.get_module_phase`). `voxel_sizes` is in
     Angstrom, axis order matching `array`; labels/extents are shown in nm.
     `symmetric_colorscale` only applies to a real array.
     """
@@ -439,7 +401,7 @@ def plot_slices(array,
 
     if array.ndim == 2:
         if is_complex:
-            module, phase = _module_phase(array, threshold_module=threshold_module,
+            module, phase = get_module_phase(array, threshold_module=threshold_module,
                                            support=support, unwrap=unwrap,
                                            apply_fftshift=apply_fftshift)
             if fig is None:
@@ -455,7 +417,7 @@ def plot_slices(array,
 
     elif array.ndim == 3:
         if is_complex:
-            module, phase = _module_phase(array, threshold_module=threshold_module,
+            module, phase = get_module_phase(array, threshold_module=threshold_module,
                                            support=support, unwrap=unwrap,
                                            apply_fftshift=apply_fftshift)
             if fig is None:
@@ -519,7 +481,7 @@ def plot_projections(array,
 
     if array.ndim == 2:
         if is_complex:
-            data = _component_3d(array, component or 'module',
+            data = _component(array, component or 'module',
                                   threshold_module=threshold_module, support=support,
                                   unwrap=unwrap, apply_fftshift=apply_fftshift)
         else:
@@ -537,7 +499,7 @@ def plot_projections(array,
         raise ValueError(f"plot_projections only supports 2D or 3D arrays, got {array.ndim}D")
 
     if is_complex:
-        data = _component_3d(array, component or 'module',
+        data = _component(array, component or 'module',
                               threshold_module=threshold_module, support=support,
                               unwrap=unwrap, apply_fftshift=apply_fftshift)
     else:
@@ -903,7 +865,7 @@ def interactive_3d_object(obj, threshold_module=None, axis=0):
     except ImportError:
         pass
 
-    module, phase = _module_phase(obj, threshold_module=threshold_module, unwrap=True)
+    module, phase = get_module_phase(obj, threshold_module=threshold_module, unwrap=True)
     shape = module.shape
 
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
