@@ -208,6 +208,74 @@ def apply_roi(array, roi, verbose=True):
     s = [slice(roi[2 * n], roi[2 * n + 1]) for n in range(array.ndim)]
     return array[tuple(s)]
 
+def crop_around_position(array, position, output_shape):
+    """
+    Crop `array` to `output_shape`, centered on `position`.
+ 
+    `output_shape` can contain None for any axis: that axis is cropped to
+    the largest size that keeps the crop symmetric about `position` along
+    it - i.e. the biggest region still truly centered there, bounded by
+    whichever side of `position` is closer to the array's edge. This is
+    different from the "shift to preserve the exact requested size"
+    behaviour used for an axis you do give an explicit size for (below):
+    a None axis never gets shifted off-center to reach a target size,
+    since it has no target size to reach.
+ 
+    An explicit (non-None) `output_shape[axis]` that is `>=
+    array.shape[axis]` is clamped to the whole axis - you get everything
+    along that axis rather than an error or an out-of-bounds index.
+ 
+    Otherwise, the crop window is shifted (not clipped) to stay inside
+    the array when `position` is close to an edge, so you still get
+    exactly `output_shape[axis]` voxels whenever that's geometrically
+    possible (e.g. a peak 2 voxels from the edge with a requested size of
+    16 still gets a full 16-voxel crop, shifted inward, rather than a
+    truncated one).
+ 
+    Parameters
+    ----------
+    array : np.ndarray
+    position : array-like of int
+        Same length as `array.ndim`.
+    output_shape : array-like of (int or None)
+        Same length as `array.ndim`.
+ 
+    Returns
+    -------
+    cropped_array : np.ndarray
+    roi : list of int
+        The roi used (see `apply_roi`).
+    """
+    shape = array.shape
+    roi = []
+    for axis, size in enumerate(shape):
+        pos = position[axis]
+        target = output_shape[axis]
+ 
+        if target is None:
+            half = min(pos, size - 1 - pos)
+            start, end = pos - half, pos + half + 1
+        elif target >= size:
+            start, end = 0, size
+        else:
+            half_before = target // 2
+            half_after = target - half_before  # 1 more than half_before for odd sizes
+ 
+            start, end = pos - half_before, pos + half_after
+            if end > size:
+                shift = end - size
+                start -= shift
+                end -= shift
+            if start < 0:
+                shift = -start
+                start += shift
+                end += shift
+ 
+        roi.append(max(start, 0))
+        roi.append(min(end, size))
+ 
+    return apply_roi(array, roi, verbose=False), roi
+
 
 def roi_automatic_peak(data, roi_size, plot=False):
     """
