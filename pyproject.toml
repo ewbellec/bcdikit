@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bcdikit"
+version = "0.0.1"
+description = "A simple, scientist-friendly toolkit for Bragg Coherent Diffraction Imaging."
+authors = [{ name = "Ewen Bellec", email = "ewen.bellec@esrf.fr" }]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "h5py",
+    "hdf5plugin",
+    "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
