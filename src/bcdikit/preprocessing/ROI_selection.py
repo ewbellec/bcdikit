@@ -1,7 +1,11 @@
-"""Finding a reference voxel ("where's the peak?") and cropping raw
-detector data around it, chaining several methods - similar in spirit to
-cdiutils' `BcdiPipeline(voxel_reference_methods=[...])` /
-`CroppingHandler.chain_centring`.
+"""Automatic ROI / reference-position selection for raw (detector-frame)
+BCDI data, to crop the data before orthogonalization.
+
+`get_reference_position` finds a single reference voxel ("where's the
+peak?") in `data`, via `'max'`, `'com'`, or your own first-guess position.
+`crop_around_peak` chains a sequence of these, narrowing the crop window
+at each step - similar in spirit to cdiutils'
+`BcdiPipeline(voxel_reference_methods=[...])` / `CroppingHandler.chain_centring`.
 
 A typical sequence is `["max", "com", "com"]`: a coarse peak search, then
 1-2 center-of-mass refinements. A plain center of mass on the raw,
@@ -24,8 +28,10 @@ them.
 """
 
 import numpy as np
+import matplotlib.patches as patches
 
 from bcdikit.utils.general import center_of_mass, crop_around_position
+from bcdikit.utils.plot import plot_projections
 
 
 def get_reference_position(data, method, previous_position=None):
@@ -50,7 +56,7 @@ def get_reference_position(data, method, previous_position=None):
     previous_position : tuple of int, optional
         The previous step's reference position, used to fill in axis 0
         when `method` is a partial (`data.ndim - 1`-length) position
-        vector. `chain_centering` passes this automatically between
+        vector. `crop_around_peak` passes this automatically between
         chained steps; not needed when calling this directly.
 
     Returns
@@ -98,7 +104,7 @@ def get_reference_position(data, method, previous_position=None):
     raise ValueError(f"method must be 'max', 'com', or a position vector, got {method!r}")
 
 
-def chain_centering(data, output_shape, methods, verbose=False):
+def crop_around_peak(data, output_shape, methods, verbose=False, plot=False):
     """Apply a sequence of centering `methods` to `data`, refining the
     crop window at each step, and return the cropped data centered on the
     final position.
@@ -123,6 +129,11 @@ def chain_centering(data, output_shape, methods, verbose=False):
         `get_reference_position`).
     verbose : bool
         Print each step's method, position, and the data value there.
+    plot : bool
+        If True, show two `bcdikit.utils.plot.plot_projections` figures:
+        the full `data`, with the found `position` (a cross) and `roi` (a
+        rectangle) overlaid in red (alpha=.5) on all 3 projections, and
+        the cropped result on its own.
 
     Returns
     -------
@@ -160,4 +171,68 @@ def chain_centering(data, output_shape, methods, verbose=False):
     position = tuple((roi[2 * n] + roi[2 * n + 1]) // 2 for n in range(data.ndim))
     cropped_position = tuple(position[n] - roi[2 * n] for n in range(data.ndim))
 
+    if plot:
+        _plot_crop_result(data, cropped_data, position, roi)
+
     return cropped_data.copy(), position, cropped_position, roi
+
+
+### -----------------------------------------------------------------------
+### Diagnostic plot
+### -----------------------------------------------------------------------
+
+def _add_cross_marker(ax, shape, position, color='red', alpha=.5, lw=1.5):
+    """Overlay a small cross at `position` on each of `ax`'s 3
+    `plot_projections` panels - one differently-placed cross per panel,
+    since each panel shows a different pair of axes (see
+    `plot_projections`'s own row/col convention: panel `n` projects out
+    axis `n` and shows the other two)."""
+    for axis in range(3):
+        remaining = [a for a in range(3) if a != axis]
+        y, x = position[remaining[0]], position[remaining[1]]
+        ny, nx = shape[remaining[0]], shape[remaining[1]]
+
+        # matshow doesn't autoscale, but a Line2D does - a cross near an
+        # edge sticks out past the image's own extent, and plotting it
+        # would otherwise silently zoom the view out to fit it (leaving a
+        # white margin, and shrinking the image within the panel). Put
+        # the limits back exactly as matshow set them once we're done.
+        xlim, ylim = ax[axis].get_xlim(), ax[axis].get_ylim()
+        ax[axis].plot([x, x], [y - 0.1 * ny, y + 0.1 * ny], color=color, alpha=alpha, lw=lw)
+        ax[axis].plot([x - 0.1 * nx, x + 0.1 * nx], [y, y], color=color, alpha=alpha, lw=lw)
+        ax[axis].set_xlim(xlim)
+        ax[axis].set_ylim(ylim)
+    return
+
+
+def _add_roi_rectangle(ax, shape, roi, color='red', alpha=.5, lw=1.5):
+    """Overlay a rectangle outlining `roi` on each of `ax`'s 3
+    `plot_projections` panels - a differently-shaped rectangle per panel
+    (same convention as `_add_cross_marker` above), not just one rectangle
+    repeated 3 times."""
+    for axis in range(3):
+        remaining = [a for a in range(3) if a != axis]
+        y0, y1 = roi[2 * remaining[0]], roi[2 * remaining[0] + 1]
+        x0, x1 = roi[2 * remaining[1]], roi[2 * remaining[1] + 1]
+        rect = patches.Rectangle((x0, y0), x1 - x0, y1 - y0,
+                                  linewidth=lw, edgecolor=color, alpha=alpha, facecolor='none')
+
+        # same reasoning as _add_cross_marker above: keep matshow's own
+        # view limits, don't let the patch's extent rescale the panel.
+        xlim, ylim = ax[axis].get_xlim(), ax[axis].get_ylim()
+        ax[axis].add_patch(rect)
+        ax[axis].set_xlim(xlim)
+        ax[axis].set_ylim(ylim)
+    return
+
+
+def _plot_crop_result(data, cropped_data, position, roi):
+    """The `plot=True` figures for `crop_around_peak`: `data`'s
+    projections with `position`/`roi` overlaid, and `cropped_data`'s
+    projections on their own."""
+    fig, ax = plot_projections(data, title='full data', return_fig_ax=True)
+    _add_cross_marker(ax, data.shape, position)
+    _add_roi_rectangle(ax, data.shape, roi)
+
+    plot_projections(cropped_data, title='cropped data')
+    return
