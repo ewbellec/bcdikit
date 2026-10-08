@@ -186,6 +186,10 @@ class Scan:
             except KeyError as e:
                 _warn("Scan.__init__", f"found detector '{self.detector}' but could not read its shape "
                                         f"(instrument/{self.detector}/dim_j or dim_i missing?): {e}")
+        try:
+            self.energy = self.get_energy()
+        except:
+            pass
 
     def show_scan_info(self):
         print(self.scan_string, self.command)

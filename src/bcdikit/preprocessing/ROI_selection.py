@@ -104,7 +104,7 @@ def get_reference_position(data, method, previous_position=None):
     raise ValueError(f"method must be 'max', 'com', or a position vector, got {method!r}")
 
 
-def crop_around_peak(data, output_shape, methods, verbose=False, plot=False):
+def crop_around_peak(data, output_shape=(None,None,None), methods=['max', 'com'], verbose=False, plot=False):
     """Apply a sequence of centering `methods` to `data`, refining the
     crop window at each step, and return the cropped data centered on the
     final position.
