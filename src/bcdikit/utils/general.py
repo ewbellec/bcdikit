@@ -44,11 +44,6 @@ def get_numpy_files(path):
 ### Center of mass / centering
 ### -----------------------------------------------------------------------
 
-def center_of_mass_array_1D(x, array1d):
-    proba = array1d / np.sum(array1d)
-    return np.sum(x * proba)
-
-
 def center_of_mass(array, pos=None):
     """
     Center of mass of an n-dimensional array.
@@ -96,14 +91,16 @@ def center_of_mass_calculation_two_steps(data,
         center = [cropping_dim[n][0] + center2[n] for n in range(data.ndim)]
 
     if plot:
-        # NOTE: plot_3D_projections isn't defined in this file - it lives in
-        # Plot_utilities.py, not yet ported to bcdikit.utils.plot. This will
-        # raise NameError until that's ported; left as-is rather than
-        # silently stubbed out.
         if data.ndim == 3:
-            fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-            plot_3D_projections(data, fig=fig, ax=ax)
-            ax[0].scatter(center[2], center[2], color='w')
+            # local import: bcdikit.utils.plot imports from this module, so
+            # importing it back at module level here would be circular -
+            # deferring it to call time (only needed for this optional
+            # plot) avoids that.
+            from bcdikit.utils.plot import plot_projections
+            fig, ax = plot_projections(data, fig=None, ax=None, return_fig_ax=True)
+            # bug fix: the original had center[2] twice here (so the 'w'
+            # marker on this panel was never actually at the found center)
+            ax[0].scatter(center[2], center[1], color='w')
             ax[1].scatter(center[2], center[0], color='w')
             ax[2].scatter(center[1], center[0], color='w')
         if data.ndim == 2:
@@ -208,10 +205,11 @@ def apply_roi(array, roi, verbose=True):
     s = [slice(roi[2 * n], roi[2 * n + 1]) for n in range(array.ndim)]
     return array[tuple(s)]
 
+
 def crop_around_position(array, position, output_shape):
     """
     Crop `array` to `output_shape`, centered on `position`.
- 
+
     `output_shape` can contain None for any axis: that axis is cropped to
     the largest size that keeps the crop symmetric about `position` along
     it - i.e. the biggest region still truly centered there, bounded by
@@ -220,18 +218,18 @@ def crop_around_position(array, position, output_shape):
     behaviour used for an axis you do give an explicit size for (below):
     a None axis never gets shifted off-center to reach a target size,
     since it has no target size to reach.
- 
+
     An explicit (non-None) `output_shape[axis]` that is `>=
     array.shape[axis]` is clamped to the whole axis - you get everything
     along that axis rather than an error or an out-of-bounds index.
- 
+
     Otherwise, the crop window is shifted (not clipped) to stay inside
     the array when `position` is close to an edge, so you still get
     exactly `output_shape[axis]` voxels whenever that's geometrically
     possible (e.g. a peak 2 voxels from the edge with a requested size of
     16 still gets a full 16-voxel crop, shifted inward, rather than a
     truncated one).
- 
+
     Parameters
     ----------
     array : np.ndarray
@@ -239,7 +237,7 @@ def crop_around_position(array, position, output_shape):
         Same length as `array.ndim`.
     output_shape : array-like of (int or None)
         Same length as `array.ndim`.
- 
+
     Returns
     -------
     cropped_array : np.ndarray
@@ -251,7 +249,7 @@ def crop_around_position(array, position, output_shape):
     for axis, size in enumerate(shape):
         pos = position[axis]
         target = output_shape[axis]
- 
+
         if target is None:
             half = min(pos, size - 1 - pos)
             start, end = pos - half, pos + half + 1
@@ -260,7 +258,7 @@ def crop_around_position(array, position, output_shape):
         else:
             half_before = target // 2
             half_after = target - half_before  # 1 more than half_before for odd sizes
- 
+
             start, end = pos - half_before, pos + half_after
             if end > size:
                 shift = end - size
@@ -270,10 +268,10 @@ def crop_around_position(array, position, output_shape):
                 shift = -start
                 start += shift
                 end += shift
- 
+
         roi.append(max(start, 0))
         roi.append(min(end, size))
- 
+
     return apply_roi(array, roi, verbose=False), roi
 
 
@@ -350,15 +348,18 @@ def slice_middle_array_along_axis(array, axis):
     return tuple(s)
 
 
-def force_even_dimension_one_array(array, verbose=True):
-    s = []
-    for n in range(array.ndim):
-        if array.shape[n] % 2 == 0:
-            s.append(slice(None))
-        else:
-            s.append(slice(1, None, None))
+def even_dimension_slices(shape):
+    """Per-axis slices that trim `shape` down to even sizes (dropping
+    index 0 of any odd axis). An fftshift/ifftshift pair - bcdikit's FFT
+    convention, see `create_diffracted_amplitude`/`create_object` below -
+    assumes an even-sized array along every axis; this is what
+    `force_even_dimension_one_array` uses to get there.
+    """
+    return tuple(slice(None) if s % 2 == 0 else slice(1, None) for s in shape)
 
-    array_even = array[tuple(s)]
+
+def force_even_dimension_one_array(array, verbose=True):
+    array_even = array[even_dimension_slices(array.shape)]
 
     if verbose:
         print('shape changed :')
@@ -422,12 +423,21 @@ def create_object(fexp):
 ### Orthogonalization / gridding (optional heavy dependency: xrayutilities)
 ### -----------------------------------------------------------------------
 
-def interpolation_xrayutilities_gridder(x, y, z, data, fuzzy_gridder=False):
+def interpolation_xrayutilities_gridder(x, y, z, data, fuzzy_gridder=False, maxbins=None):
+    """Grid `data` (given at the possibly-irregular 3D coordinates `x`,
+    `y`, `z`) onto a regular 3D grid via xrayutilities.
+
+    `maxbins`, if given, skips the automatic bin-count estimation (the
+    number of bins along each axis, picked from the finest step in `x`/
+    `y`/`z`) - pass the same `maxbins` across several calls (e.g. data and
+    a mask) to make sure they land on the exact same grid.
+    """
     import xrayutilities as xu
-    maxbins = []
-    for dim in (x, y, z):
-        maxstep = max((abs(np.diff(dim, axis=j)).max() for j in range(3)))
-        maxbins.append(int(abs(dim.max() - dim.min()) / maxstep))
+    if maxbins is None:
+        maxbins = []
+        for dim in (x, y, z):
+            maxstep = max((abs(np.diff(dim, axis=j)).max() for j in range(3)))
+            maxbins.append(int(abs(dim.max() - dim.min()) / maxstep))
 
     if fuzzy_gridder:
         gridder = xu.FuzzyGridder3D(*maxbins)

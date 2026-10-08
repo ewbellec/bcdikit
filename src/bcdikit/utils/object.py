@@ -236,10 +236,20 @@ def automatic_object_roi_on_support(obj, threshold_module=.3, plot=False):
 ### Oversampling
 ### -----------------------------------------------------------------------
 
-def compute_oversampling_ratio(obj, threshold_module=.3, plot=False):
-    """Oversampling ratio (array size / support size) along each axis."""
-    module = np.abs(obj)
-    support = module > threshold_module * np.max(module)
+def compute_oversampling_ratio(obj=None, threshold_module=.3, support=None, plot=False):
+    """Oversampling ratio (array size / support size) along each axis.
+
+    Pass `obj` (the default) to have the support thresholded from its
+    module automatically (see `threshold_module`), or pass `support`
+    directly to use one you already computed another way - e.g. from an
+    auto-correlation, before any reconstruction even exists yet (see
+    `bcdikit.preprocessing.diagnostics.oversampling_from_diffraction`).
+    """
+    if support is None:
+        if obj is None:
+            raise ValueError("compute_oversampling_ratio needs either `obj` or `support`")
+        module = np.abs(obj)
+        support = module > threshold_module * np.max(module)
 
     indices_support = np.where(support)
     size_per_dim = np.max(indices_support, axis=1) - np.min(indices_support, axis=1)
