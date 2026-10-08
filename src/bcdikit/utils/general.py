@@ -10,6 +10,8 @@ data, not figures.
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import fabio
+import h5py
 
 
 ### -----------------------------------------------------------------------
@@ -38,6 +40,60 @@ def get_numpy_files(path):
         if ('.npz' in f) or ('.npy' in f):
             files.append(path + f)
     return files
+
+### -----------------------------------------------------------------------
+### File opener
+### -----------------------------------------------------------------------
+
+def file_opener(filepath, key=None):
+    '''
+    Auto open different data formats: .edf, .npy, .npz, .h5/.hdf5, .cxi.
+
+    key : str, optional
+        Which array to return, for formats that can hold several:
+        - .npz: the key to index into (as in `np.load(f)[key]`). If
+          omitted and the file has only one array, that one is
+          returned; with several, the NpzFile itself is returned so
+          you can index it yourself (e.g. `data['qx']`).
+        - .h5 / .cxi: the internal hdf5 dataset path (e.g.
+          'entry_1/data_1/data'). For .cxi, defaults to
+          'entry_1/data_1/data' (the standard CXI data path) if not
+          given. For .h5 there's no standard default, so `key` is
+          required.
+    '''
+    extension = filepath.split('.')[-1].lower()
+
+    if extension == 'edf':
+        data = fabio.open(filepath).data
+
+    elif extension == 'npy':
+        data = np.load(filepath)
+
+    elif extension == 'npz':
+        npz = np.load(filepath)
+        if key is not None:
+            data = npz[key]
+        elif len(npz.files) == 1:
+            data = npz[npz.files[0]]
+        else:
+            data = npz
+
+    elif extension in ('h5', 'hdf5', 'cxi'):
+        if key is None:
+            if extension == 'cxi':
+                key = 'entry_1/data_1/data'
+            else:
+                raise ValueError(
+                    "file_opener needs a `key` (the internal hdf5 dataset "
+                    "path, e.g. 'entry_1/data') to open a .h5 file."
+                )
+        with h5py.File(filepath, 'r') as h5f:
+            data = h5f[key][()]
+
+    else:
+        raise ValueError(f"file_opener function isn't ready for this file format ({extension}). Open it yourself !")
+
+    return data
 
 
 ### -----------------------------------------------------------------------
