@@ -1,55 +1,14 @@
 import os
 import numpy as np
-import h5py
 
 from bcdikit.utils.plot import plot_projections
-
-### -----------------------------------------------------------------------
-### Mask
-### -----------------------------------------------------------------------
- 
-# def load_mask(scan, data, roi=None, mask_dir=None, plot=False):
-#     """Load a detector mask for `scan`, broadcast to `data`'s 3D shape.
- 
-#     Uses `scan.mask` directly if the data opener already provides one
-#     (e.g. PETRA). Otherwise, if `mask_dir` is given, looks for
-#     `mask_dir/mask_<scan.detector>.npy` (optionally cropped to `roi`,
-#     `[y0, y1, x0, x1]`, detector pixel coordinates). Falls back to an
-#     all-zero ("nothing masked") mask if neither is available.
-#     """
-#     if getattr(scan, 'mask', None) is not None:
-#         mask = np.zeros(data.shape)
-#         mask += scan.mask[None, :, :]
-#     elif mask_dir is not None:
-#         mask_path = os.path.join(mask_dir, f'mask_{scan.detector}.npy')
-#         if os.path.isfile(mask_path):
-#             mask2d = np.load(mask_path)
-#             if roi is not None:
-#                 mask2d = mask2d[roi[0]:roi[1], roi[2]:roi[3]]
-#             mask = np.zeros(data.shape)
-#             mask += mask2d[None]
-#         else:
-#             mask = np.zeros(data.shape)
-#     else:
-#         mask = np.zeros(data.shape)
- 
-#     if plot:
-#         plot_projections(mask, log_scale=False, cmap='gray_r', max_projection=True, title='mask')
-#         plot_projections((1 - mask) * data, title='data with mask applied')
- 
-#     return mask
-
-import os
-import numpy as np
-
-from bcdikit.utils.plot import plot_projections
-from bcdikit.utils.general import apply_roi, print_warning
+from bcdikit.utils.general import apply_roi, print_warning, file_opener
 
 ### -----------------------------------------------------------------------
 ### Mask
 ### -----------------------------------------------------------------------
 
-def load_mask(detector, data, roi=None, mask_dir=None, plot=False):
+def mask_loading(detector, data, roi=None, mask_dir=None, plot=False):
     '''
     Load a 2D detector mask for `detector`, broadcast to `data`'s 3D shape.
 
@@ -90,14 +49,10 @@ def load_mask(detector, data, roi=None, mask_dir=None, plot=False):
 ### Detector saturation
 ### -----------------------------------------------------------------------
  
-def check_detector_saturation(data, scan, saturation_levels=None):
+def saturation_detector_check(data, detector):
     '''
     Warn if `data`'s maximum is above the detector's known linear
     dynamic range.
- 
-    `saturation_levels` is a `{detector_name: counts}` dict, merged over
-    the built-in defaults (currently just `{'mpx1x4': 150000}`) - pass
-    your own entry for a detector that isn't listed here.
     '''
     levels = {'mpx1x4': 150000,
               'mpxgaas': 150000,
@@ -106,11 +61,40 @@ def check_detector_saturation(data, scan, saturation_levels=None):
     maxi = np.nanmax(data)
     print('maximum counts :', maxi)
  
-    if scan.detector in levels:
-        if maxi > levels[scan.detector]:
-            print(f'{scan.detector} detector in non-linear dynamic range')
+    if detector in levels:
+        if maxi > levels[detector]:
+            print(f'{detector} detector in non-linear dynamic range')
         else:
             print('no saturation')
     else:
         print('detector saturation level unknown. Can\'t tell you, sorry.')
     return
+
+
+### -----------------------------------------------------------------------
+### Flatfield correction
+### -----------------------------------------------------------------------
+
+def flatfield_correction(data, roi, flatfield_file, plot=False):
+    """
+    Multiply `data` by a flatfield loaded from `flatfield_file` (.h5,
+    .npz or .npy), cropped to `roi`'s detector-plane extent
+    (`[_, _, y0, y1, x0, x1]`, only the last 4 entries are used).
+    """
+    flatfield = file_opener(flatfield_file)
+ 
+    flatfield = apply_roi(flatfield,roi[2:])
+    data_corrected = data * flatfield[None]
+    data_corrected[np.isnan(data_corrected)] = 0  # nan's in the flatfield mask out that pixel
+ 
+    if plot:
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(8, 8))
+        plt.imshow(np.log(flatfield))
+        plt.colorbar()
+        plt.title('log flatfield (in ROI)', fontsize=20)
+ 
+        plot_projections(data, title='before flatfield correction')
+        plot_projections(data_corrected, title='after flatfield correction')
+ 
+    return data_corrected
